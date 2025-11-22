@@ -1,7 +1,7 @@
-import json
-from enum import Enum
-import math
-from itertools import groupby
+from common import Column, Hand, NoteType, Row, Tile, Finger
+from note import Note, FingerNote
+from chord import Chord, FingerChord
+from map import Map, FingerMap
 
 # Pulsus Handing Helper
 #
@@ -41,192 +41,48 @@ from itertools import groupby
 #
 
 
-class Hand(Enum):
-    RIGHT = 0
-    LEFT = 1
-    EITHER = 2
+class PressedFinger:
+    def __init__(self, finger: Finger, tile: Tile, time_held: int):
+        self._finger = finger
+        self._tile = tile
+        self.time_held = time_held
 
 
-class Row(Enum):
-    TOP = 0
-    MIDDLE = 1
-    BOTTOM = 2
+class HandingIterator:
+    def __init__(self, map):
 
-
-class Column(Enum):
-    LEFT = 0
-    CENTER = 1
-    RIGHT = 2
-
-
-class NoteType(Enum):
-    BEAT = 0
-    HOLD = 1
-
-
-class Tile(Enum):
-    TL = 0
-    TC = 1
-    TR = 2
-    ML = 3
-    MC = 4
-    MR = 5
-    BL = 6
-    BC = 7
-    BR = 8
-
-
-class Note:
-    def __init__(self,
-                 tile: int,
-                 time: int,
-                 type: int,
-                 hold_length: int,
-                 hue: int,
-                 sat: int,
-                 bri: int,
-                 bpm: int,
-                 offset: int,
-                 transition_in: int,
-                 transition_out: int,
-                 pulsus_time: float,
-                 pulsus_hold_length: float):
-        self._tile: Tile = Tile(tile)
-        self._time: int = time
-        self._type: NoteType = NoteType(type)
-        self._hold_length: int = hold_length
-        self._hue: int = hue
-        self._sat: int = sat
-        self._bri: int = bri
-        self._pulsus_time = pulsus_time
-        self._pulsus_hold_length = pulsus_hold_length
-
-        self._bpm = bpm
-        self._offset = offset
-        self._transition_in = transition_in
-        self._transition_out = transition_out
-
-        self.hand = Hand.RIGHT
-
-    def set_hue(self, hue: int) -> None:
-        self._hue = max(min(hue, 255), 0)
-
-    def set_sat(self, sat: int) -> None:
-        self._sat = max(min(sat, 255), 0)
-
-    def set_bri(self, bri: int) -> None:
-        self._bri = max(min(bri, 255), 0)
-
-    def color_self(self) -> None:
-        self.sat = 255
-        self.bri = 255
-        if self.hand == Hand.RIGHT:
-            self.set_hue(141)
-        elif self.hand == Hand.LEFT:
-            self.set_hue(0)
-        else:
-            self.set_hue(70)
-
-    @property
-    def tile(self) -> Tile:
-        return self._tile
-
-    @property
-    def time(self) -> int:
-        return self._time
-
-    @property
-    def column(self) -> Column:
-        return Column(self._tile.value % 3)
-
-    @property
-    def row(self) -> Row:
-        return Row(math.floor(self._tile.value / 3))
-
-
-class Chord:
-    def __init__(self, notes: list[Note]):
-        self.notes: list[Note] = notes
-        self.time: int = self.notes[0]._time
-        self.count = len(self.notes)
-
-    def color_self(self):
-        for note in self.notes:
-            note.color_self()
-
-
-class Map:
-    def __init__(self, chords=[]):
-        self.chords: list[Chord] = chords
-
-    def map_from_ttbeat_json(self, filepath="beats.json"):
-        with open(filepath, "r") as f:
-            mapdata = json.load(f)
-
-        notes = []
-        for note in mapdata:
-            new_beat = Note(note[0], round(note[1]*500), note[5],
-                            round(note[6]*500), note[11], note[16], note[17], note[9], note[10], note[13], note[14], note[1], note[6])
-            notes.append(new_beat)
-        chord_list = [list(note) for _, note in groupby(
-            notes, key=lambda note: note._time)]
-        self.chords = [Chord(chord) for chord in chord_list]
-        return self
-
-    def map_data_to_ttbeat_json(self, filepath="new_beats.json"):
-        json_notes = []
-        for chord in self.chords:
-            for note in chord.notes:
-                json_notes.append([
-                    note._tile.value,
-                    note._pulsus_time,
-                    False,
-                    0,
-                    False,
-                    note._type.value,
-                    note._pulsus_hold_length,
-                    0,
-                    0,
-                    note._bpm,
-                    note._offset,
-                    note._hue,
-                    None,
-                    note._transition_in,
-                    note._transition_out,
-                    True,
-                    note._sat,
-                    note._bri
-                ])
-        with open(filepath, "w") as f:
-            json.dump(json_notes, f, indent=4)
+        pass
 
 
 class HandingParser:
-    def __init__(self, map):
+    def __init__(self, map: Map) -> None:
         self.map: Map = map
         self.default_threshold = 350  # around 1 beat at 180 bpm
         self.min_overload_time = 80  # 200 bpm 1/4 jack/overload time
-        self.trill_strain_threshold = 1  # idk
+        self.release_time = 50
         self.max_fingers_per_hand = 2
         self.parsed_map = self.parse_handing()
 
-    def default_handing(self, chord: Chord):
+    def default_handing(self, chord: Chord) -> FingerChord:
+        fnotes: list[FingerNote] = []
         for note in chord.notes:
             if note.column == Column.LEFT:
-                note.hand = Hand.LEFT
+                fnotes.append(FingerNote(note, Finger.LA))
             elif note.column == Column.RIGHT:
-                note.hand = Hand.RIGHT
+                fnotes.append(FingerNote(note, Finger.RA))
             else:
-                note.hand = Hand.EITHER
+                fnotes.append(FingerNote(note, Finger.EA))
+        for fnote in fnotes:
+            if fnote.hand == Hand.EITHER and any(n.hand == Hand.RIGHT for n in fnotes):
+                finger = Finger.RA
+            elif fnote.hand == Hand.EITHER and any(n.hand == Hand.LEFT for n in fnotes):
+                finger = Finger.LA
 
-        for note in chord.notes:
-            if note.hand == Hand.EITHER and any(n.hand == Hand.RIGHT for n in chord.notes):
-                note.hand = Hand.RIGHT
-            elif note.hand == Hand.EITHER and any(n.hand == Hand.LEFT for n in chord.notes):
-                note.hand = Hand.LEFT
-        chord.color_self()
+        fchord: FingerChord = FingerChord(fnotes)
+        fchord.color_self()
+        return fchord
 
-    def parse_handing(self):
+    def parse_handing(self) -> FingerMap:
         split_maps: list[Map] = []
         previous_split_index = 0
         for i in range(len(self.map.chords)):
@@ -236,21 +92,43 @@ class HandingParser:
             if self.map.chords[i].time - self.map.chords[i-1].time >= self.default_threshold:
                 split_maps.append(
                     Map(self.map.chords[previous_split_index:i-1]))
-        split_maps.append(Map(self.map.chords[previous_split_index:]))
+                previous_split_index = i
 
-        parsed_chords: list[Chord] = []
+        split_maps.append(Map(self.map.chords[previous_split_index:]))
+        parsed_chords: list[FingerChord] = []
         for map in split_maps:
             for chord in map.chords:
-                self.default_handing(chord)
-            parsed_chords.append(map.chords)
-        parsed_map = Map(parsed_chords)
+                parsed_chords.append(self.default_handing(chord))
+        parsed_map = FingerMap(parsed_chords)
         return parsed_map
+
+# class has list of chords (map)
+# has a cursor
+# has next method that increments and decrements the cursor
+# has a get method that gets value at cursor
+
+# create engine that takes a map and associated handing and calculates a score for the handing
+# then create a search algorithm to optimize that handing
+
+# tuple
+# for each tile, if nothing else is pressed, heres the priority for what finger should be used next
+# when going to press a key, you have in memory the other keys pressed, so when pressing the new key go through the priority list and use it if possible
+# dictionary!
+
+# do the backward stuff later, just do an initial sweep for now
+# use dfs/bfs idk
+
+# [note with known handing, all the other notes]
+# cursor
+# (None x9)
+# (None, None, (class/dictionary containing press time and finger), None x6)
 
 
 def main():
     map = Map().map_from_ttbeat_json()
     parser = HandingParser(map)
-    Map.map_data_to_ttbeat_json(parser.parsed_map)
+    FingerMap.map_data_to_ttbeat_json(parser.parsed_map)
 
 
-main()
+if __name__ == "__main__":
+    main()
