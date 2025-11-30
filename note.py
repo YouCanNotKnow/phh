@@ -50,6 +50,14 @@ class Note:
         return self._time
 
     @property
+    def type(self) -> NoteType:
+        return self._type
+
+    @property
+    def hold_length(self) -> int:
+        return self._hold_length
+
+    @property
     def column(self) -> Column:
         return Column(self._tile.value % 3)
 
@@ -66,6 +74,10 @@ class FingerNote:
     @property
     def hand(self):
         return self.finger.hand
+
+    @property
+    def time(self):
+        return self.note.time
 
     def color_self(self) -> None:
         self.note.set_sat(255)

@@ -2,6 +2,7 @@ from common import Column, Hand, NoteType, Row, Tile, Finger
 from note import Note, FingerNote
 from chord import Chord, FingerChord
 from map import Map, FingerMap
+from typing import TypeAlias
 
 # Pulsus Handing Helper
 #
@@ -42,45 +43,137 @@ from map import Map, FingerMap
 
 
 class PressedFinger:
-    def __init__(self, finger: Finger, tile: Tile, time_held: int):
-        self._finger = finger
-        self._tile = tile
-        self.time_held = time_held
+    def __init__(self, finger: Finger, press_time: int, type: int, hold_length: int):
+        self._finger: Finger = finger
+        self._press_time: int = press_time
+        self._type: int = type
+        self._hold_length: int = hold_length
+        self.time_held: int = 0
+
+    @property
+    def finger(self) -> Finger:
+        return self._finger
+
+    @property
+    def press_time(self) -> int:
+        return self._press_time
+
+    @property
+    def type(self) -> int:
+        return self._type
+
+    @property
+    def hold_length(self) -> int:
+        return self._hold_length
 
 
 class HandingIterator:
-    def __init__(self, map):
+    def __init__(self, fmap: FingerMap):
+        self.cursor: int = 0
+        self.fmap: FingerMap = fmap
+        PFingersTuple: TypeAlias = tuple[None | PressedFinger, None | PressedFinger, None | PressedFinger,
+                                         None | PressedFinger, None | PressedFinger, None | PressedFinger,
+                                         None | PressedFinger, None | PressedFinger, None | PressedFinger]
+        self.pressed_fingers: PFingersTuple = (None, None, None,
+                                               None, None, None,
+                                               None, None, None)
+        self.previous_fingers: list[PFingersTuple] = []
 
-        pass
+    def next_chord(self):
+        if self.cursor + 1 > len(self.fmap.fchords):
+            raise Exception("Cursor greater than map length")
+
+        self.reset_fingers(self.read_cursor())
+        # currently Ignorantly overwrites pressed fingers.
+        new_pfingers = list(self.pressed_fingers)
+        for fnote in self.read_cursor().fnotes:
+            new_pfingers[fnote.note.tile.value] = PressedFinger(
+                fnote.finger, fnote.time, fnote.note.type, fnote.note.hold_length)
+        self.pressed_fingers = tuple(new_pfingers)
+        self.cursor += 1
+
+    def prev_chord(self):
+        if cursor - 1 < 0:
+            raise Exception("Cursor less than 0")
+        cursor -= 1
+
+    def read_cursor(self) -> FingerChord:
+        return self.fmap.fchords[self.cursor]
+
+    def reset_fingers(self, next_fchord: FingerChord):
+        self.previous_fingers.append(self.pressed_fingers)
+        new_pfingers = list(self.pressed_fingers)
+        for pfinger in new_pfingers:
+            if pfinger is None:
+                continue
+
+            if pfinger.type is NoteType.BEAT:
+                pfinger = None
+                continue
+
+            pfinger.time_held += next_fchord.time - pfinger.press_time
+            if pfinger.time_held >= pfinger.hold_length:
+                pfinger = None
+                continue
+        self.pressed_fingers = tuple(new_pfingers)
 
 
 class HandingParser:
     def __init__(self, map: Map) -> None:
         self.map: Map = map
-        self.default_threshold = 350  # around 1 beat at 180 bpm
-        self.min_overload_time = 80  # 200 bpm 1/4 jack/overload time
-        self.release_time = 50
-        self.max_fingers_per_hand = 2
-        self.parsed_map = self.parse_handing()
+        self.default_threshold: float = 350  # around 1 beat at 180 bpm
+        self.min_overload_time: float = 80  # 200 bpm 1/4 jack/overload time
+        self.release_time: float = 50
+        self.max_fingers_per_hand: int = 2
+        self.parsed_map: FingerMap = self.parse_handing()
+
+        # NOTE THESE ARE WRITTEN AS TILES ON THE NUMPAD FOR EASE OF EDITING
+        # the basis of this map is based on distance and angles. prefer short distances with inward angles
+        # then downwards diagonal to downwards angles
+        # then gradual upwards angles
+        # there are some symmetries on the pulsus board like if i was hitting 5 into 4 or 6 thats technically the same.
+        # because these lists are ordered, the lists prefer *going right* to emulate right hand dominance
+        # on vertical symmetries lik 963, prefer downwards
+        # shouldnt change much idk
+        self._tile_handing_map: dict[int, list[int]] = {
+            7: [8, 5, 4, 2, 1, 9, 6, 3],
+            8: [9, 6, 5, 3, 2, 7, 4, 1],
+            9: [8, 5, 6, 2, 3, 7, 4, 1],
+            4: [5, 2, 1, 8, 7, 6, 3, 9],
+            5: [6, 4, 9, 7, 8, 3, 1, 2],
+            6: [5, 2, 3, 8, 9, 4, 1, 7],
+            1: [2, 5, 4, 8, 7, 3, 6, 9],
+            2: [3, 1, 6, 4, 9, 7, 5, 8],
+            3: [2, 5, 6, 8, 9, 1, 4, 7]
+        }
+        tile_mapping: dict[int, int] = {
+            7: 0, 8: 1, 9: 2, 4: 3, 5: 4, 6: 5, 1: 6, 2: 7, 3: 8}
+        self.tile_handing_map: dict[int, list[int]] = {
+            tile_mapping[k]: [tile_mapping[x] for x in v]
+            for k, v in self._tile_handing_map.items()
+        }
 
     def default_handing(self, chord: Chord) -> FingerChord:
         fnotes: list[FingerNote] = []
         for note in chord.notes:
             if note.column == Column.LEFT:
-                fnotes.append(FingerNote(note, Finger.LA))
+                fnotes.append(FingerNote(note, Finger.LM))
             elif note.column == Column.RIGHT:
-                fnotes.append(FingerNote(note, Finger.RA))
+                fnotes.append(FingerNote(note, Finger.RM))
             else:
-                fnotes.append(FingerNote(note, Finger.EA))
-        for fnote in fnotes:
-            if fnote.hand == Hand.EITHER and any(n.hand == Hand.RIGHT for n in fnotes):
-                finger = Finger.RA
-            elif fnote.hand == Hand.EITHER and any(n.hand == Hand.LEFT for n in fnotes):
-                finger = Finger.LA
+                fnotes.append(FingerNote(note, Finger.EI))
 
         fchord: FingerChord = FingerChord(fnotes)
         fchord.color_self()
         return fchord
+
+    def iterate_handing(self, fmap: FingerMap) -> FingerMap:
+        iterator: HandingIterator = HandingIterator(fmap)
+        iterated_fchords = []
+        for i in range(len(fmap.fchords)):
+            iterated_fchords.append(iterator.read_cursor())
+            iterator.next_chord()
+        return FingerMap(iterated_fchords)
 
     def parse_handing(self) -> FingerMap:
         split_maps: list[Map] = []
@@ -97,15 +190,16 @@ class HandingParser:
         split_maps.append(Map(self.map.chords[previous_split_index:]))
         parsed_chords: list[FingerChord] = []
         for map in split_maps:
+            split_parsed_chords: list[FingerChord] = []
             for chord in map.chords:
-                parsed_chords.append(self.default_handing(chord))
-        parsed_map = FingerMap(parsed_chords)
+                split_parsed_chords.append(self.default_handing(chord))
+            split_parsed_map = FingerMap(split_parsed_chords)
+            iterated_parsed_map: FingerMap = self.iterate_handing(
+                split_parsed_map)
+            for fchord in iterated_parsed_map.fchords:
+                parsed_chords.append(fchord)
+        parsed_map: FingerMap = FingerMap(parsed_chords)
         return parsed_map
-
-# class has list of chords (map)
-# has a cursor
-# has next method that increments and decrements the cursor
-# has a get method that gets value at cursor
 
 # create engine that takes a map and associated handing and calculates a score for the handing
 # then create a search algorithm to optimize that handing
@@ -122,6 +216,9 @@ class HandingParser:
 # cursor
 # (None x9)
 # (None, None, (class/dictionary containing press time and finger), None x6)
+# for jacks, store the previous finger on the tile and just rehit that. if the next note is too fast on some threshold,
+# instead alternate on the other hand
+# might need to specify finger maps for each specific finger??? idk
 
 
 def main():
